@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"net"
 	"context"
 	"crypto/md5"
 	"fmt"
@@ -230,6 +231,11 @@ func (c *Cluster) BuildKubeControllerProcess(prefixPath string) v3.Process {
 		"kube-controller-manager",
 	}
 
+	allocateNodeCidrs := "true"
+	if (c.Services.Kubelet.ExtraArgs["network-plugin"] == "kubenet") {
+		allocateNodeCidrs = "false"
+	}
+
 	CommandArgs := map[string]string{
 		"address":                     "0.0.0.0",
 		"cloud-provider":              c.CloudProvider.Name,
@@ -241,7 +247,7 @@ func (c *Cluster) BuildKubeControllerProcess(prefixPath string) v3.Process {
 		"node-monitor-grace-period":   "40s",
 		"pod-eviction-timeout":        "5m0s",
 		"v": "2",
-		"allocate-node-cidrs":              "true",
+		"allocate-node-cidrs":              allocateNodeCidrs,
 		"cluster-cidr":                     c.ClusterCIDR,
 		"service-cluster-ip-range":         c.Services.KubeController.ServiceClusterIPRange,
 		"service-account-private-key-file": pki.GetKeyPath(pki.KubeAPICertName),
@@ -407,6 +413,13 @@ func (c *Cluster) BuildKubeletProcess(host *hosts.Host, prefixPath string) v3.Pr
 		if _, ok := c.Services.Kubelet.ExtraArgs[arg]; ok {
 			CommandArgs[arg] = value
 		}
+	}
+
+	if CommandArgs["network-plugin"] == "kubenet" {
+		ip := net.ParseIP(host.InternalAddress)
+		ip = ip.To4()
+		ip[3] = 128
+		CommandArgs["pod-cidr"] = ip.String() + "/25"
 	}
 
 	for arg, value := range CommandArgs {
