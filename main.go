@@ -4,6 +4,7 @@ import (
 	"os"
 	"regexp"
 
+	"github.com/mattn/go-colorable"
 	"github.com/rancher/rke/cmd"
 	"github.com/sirupsen/logrus"
 	"github.com/urfave/cli"
@@ -13,6 +14,8 @@ var VERSION = "v0.0.12-dev"
 var released = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
 
 func main() {
+	logrus.SetOutput(colorable.NewColorableStdout())
+
 	if err := mainErr(); err != nil {
 		logrus.Fatal(err)
 	}
@@ -42,6 +45,7 @@ func mainErr() error {
 		cmd.VersionCommand(),
 		cmd.ConfigCommand(),
 		cmd.EtcdCommand(),
+		cmd.CertificateCommand(),
 	}
 	app.Flags = []cli.Flag{
 		cli.BoolFlag{

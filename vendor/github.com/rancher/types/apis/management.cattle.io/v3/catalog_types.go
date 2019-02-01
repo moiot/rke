@@ -2,6 +2,8 @@ package v3
 
 import (
 	"github.com/rancher/norman/condition"
+	"github.com/rancher/norman/types"
+
 	"k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -22,6 +24,8 @@ type CatalogSpec struct {
 	URL         string `json:"url,omitempty" norman:"required"`
 	Branch      string `json:"branch,omitempty"`
 	CatalogKind string `json:"catalogKind,omitempty"`
+	Username    string `json:"username,omitempty"`
+	Password    string `json:"password,omitempty" norman:"type=password"`
 }
 
 type CatalogStatus struct {
@@ -34,6 +38,7 @@ type CatalogStatus struct {
 
 var (
 	CatalogConditionRefreshed condition.Cond = "Refreshed"
+	CatalogConditionUpgraded  condition.Cond = "Upgraded"
 )
 
 type CatalogCondition struct {
@@ -66,10 +71,26 @@ type Template struct {
 	Status TemplateStatus `json:"status"`
 }
 
+type CatalogTemplate struct {
+	types.Namespaced
+
+	metav1.TypeMeta `json:",inline"`
+	// Standard object’s metadata. More info:
+	// https://github.com/kubernetes/community/blob/master/contributors/devel/api-conventions.md#metadata
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+	// Specification of the desired behavior of the the cluster. More info:
+	// https://github.com/kubernetes/community/blob/master/contributors/devel/api-conventions.md#spec-and-status
+	Template
+}
+
 type TemplateSpec struct {
 	DisplayName              string `json:"displayName"`
 	CatalogID                string `json:"catalogId,omitempty" norman:"type=reference[catalog]"`
+	ProjectCatalogID         string `json:"projectCatalogId,omitempty" norman:"type=reference[projectCatalog]"`
+	ClusterCatalogID         string `json:"clusterCatalogId,omitempty" norman:"type=reference[clusterCatalog]"`
 	DefaultTemplateVersionID string `json:"defaultTemplateVersionId,omitempty" norman:"type=reference[templateVersion]"`
+	ProjectID                string `json:"projectId,omitempty" norman:"required,type=reference[project]"`
+	ClusterID                string `json:"clusterId,omitempty" norman:"required,type=reference[cluster]"`
 
 	Description    string `json:"description,omitempty"`
 	DefaultVersion string `json:"defaultVersion,omitempty" yaml:"default_version,omitempty"`
@@ -100,6 +121,17 @@ type TemplateVersion struct {
 	// https://github.com/kubernetes/community/blob/master/contributors/devel/api-conventions.md#spec-and-status
 	Spec   TemplateVersionSpec   `json:"spec"`
 	Status TemplateVersionStatus `json:"status"`
+}
+
+type CatalogTemplateVersion struct {
+	types.Namespaced
+	metav1.TypeMeta `json:",inline"`
+	// Standard object’s metadata. More info:
+	// https://github.com/kubernetes/community/blob/master/contributors/devel/api-conventions.md#metadata
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+	// Specification of the desired behavior of the the cluster. More info:
+	// https://github.com/kubernetes/community/blob/master/contributors/devel/api-conventions.md#spec-and-status
+	TemplateVersion
 }
 
 type TemplateVersionSpec struct {
@@ -171,4 +203,18 @@ type TemplateContent struct {
 	// Specification of the desired behavior of the the cluster. More info:
 	// https://github.com/kubernetes/community/blob/master/contributors/devel/api-conventions.md#spec-and-status
 	Data string `json:"data,omitempty"`
+}
+
+type ProjectCatalog struct {
+	types.Namespaced
+
+	Catalog     `json:",inline" mapstructure:",squash"`
+	ProjectName string `json:"projectName,omitempty" norman:"type=reference[project]"`
+}
+
+type ClusterCatalog struct {
+	types.Namespaced
+
+	Catalog     `json:",inline" mapstructure:",squash"`
+	ClusterName string `json:"clusterName,omitempty" norman:"required,type=reference[cluster]"`
 }

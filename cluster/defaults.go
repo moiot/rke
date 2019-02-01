@@ -3,10 +3,15 @@ package cluster
 import (
 	"context"
 	"fmt"
+	"strings"
 
+	"github.com/rancher/rke/cloudprovider"
+	"github.com/rancher/rke/docker"
 	"github.com/rancher/rke/k8s"
 	"github.com/rancher/rke/log"
 	"github.com/rancher/rke/services"
+	"github.com/rancher/rke/templates"
+	"github.com/rancher/rke/util"
 	"github.com/rancher/types/apis/management.cattle.io/v3"
 )
 
@@ -27,14 +32,38 @@ const (
 	DefaultAuthStrategy      = "x509"
 	DefaultAuthorizationMode = "rbac"
 
+	DefaultAuthnWebhookFile  = templates.AuthnWebhook
+	DefaultAuthnCacheTimeout = "5s"
+
 	DefaultNetworkPlugin        = "canal"
 	DefaultNetworkCloudProvider = "none"
 
-	DefaultIngressController         = "nginx"
-	DefaultEtcdBackupCreationPeriod  = "5m0s"
-	DefaultEtcdBackupRetentionPeriod = "24h"
-	DefaultMonitoringProvider        = "metrics-server"
+	DefaultIngressController             = "nginx"
+	DefaultEtcdBackupCreationPeriod      = "12h"
+	DefaultEtcdBackupRetentionPeriod     = "72h"
+	DefaultEtcdSnapshot                  = true
+	DefaultMonitoringProvider            = "metrics-server"
+	DefaultEtcdBackupConfigIntervalHours = 12
+	DefaultEtcdBackupConfigRetention     = 6
+	DefaultDNSProvider                   = "kubedns"
+
+	DefaultEtcdHeartbeatIntervalName  = "heartbeat-interval"
+	DefaultEtcdHeartbeatIntervalValue = "500"
+	DefaultEtcdElectionTimeoutName    = "election-timeout"
+	DefaultEtcdElectionTimeoutValue   = "5000"
 )
+
+type ExternalFlags struct {
+	CertificateDir   string
+	ClusterFilePath  string
+	DinD             bool
+	ConfigDir        string
+	CustomCerts      bool
+	DisablePortCheck bool
+	GenerateCSR      bool
+	Local            bool
+	UpdateOnly       bool
+}
 
 func setDefaultIfEmptyMapValue(configMap map[string]string, key string, value string) {
 	if _, ok := configMap[key]; !ok {
@@ -48,7 +77,7 @@ func setDefaultIfEmpty(varName *string, defaultValue string) {
 	}
 }
 
-func (c *Cluster) setClusterDefaults(ctx context.Context) {
+func (c *Cluster) setClusterDefaults(ctx context.Context) error {
 	if len(c.SSHKeyPath) == 0 {
 		c.SSHKeyPath = DefaultClusterSSHKeyPath
 	}
@@ -82,6 +111,7 @@ func (c *Cluster) setClusterDefaults(ctx context.Context) {
 			c.Nodes[i].Port = DefaultSSHPort
 		}
 
+		c.Nodes[i].HostnameOverride = strings.ToLower(c.Nodes[i].HostnameOverride)
 		// For now, you can set at the global level only.
 		c.Nodes[i].SSHAgentAuth = c.SSHAgentAuth
 	}
@@ -108,9 +138,28 @@ func (c *Cluster) setClusterDefaults(ctx context.Context) {
 	if len(c.Monitoring.Provider) == 0 {
 		c.Monitoring.Provider = DefaultMonitoringProvider
 	}
-	c.setClusterImageDefaults()
+	//set docker private registry URL
+	for _, pr := range c.PrivateRegistries {
+		if pr.URL == "" {
+			pr.URL = docker.DockerRegistryURL
+		}
+		c.PrivateRegistriesMap[pr.URL] = pr
+	}
+
+	err := c.setClusterImageDefaults()
+	if err != nil {
+		return err
+	}
+
+	if len(c.DNS.Provider) == 0 {
+		c.DNS.Provider = DefaultDNSProvider
+	}
+
 	c.setClusterServicesDefaults()
 	c.setClusterNetworkDefaults()
+	c.setClusterAuthnDefaults()
+
+	return nil
 }
 
 func (c *Cluster) setClusterServicesDefaults() {
@@ -122,6 +171,12 @@ func (c *Cluster) setClusterServicesDefaults() {
 	c.Services.Kubeproxy.Image = c.SystemImages.Kubernetes
 	c.Services.Etcd.Image = c.SystemImages.Etcd
 
+	// enable etcd snapshots by default
+	if c.Services.Etcd.Snapshot == nil {
+		defaultSnapshot := DefaultEtcdSnapshot
+		c.Services.Etcd.Snapshot = &defaultSnapshot
+	}
+
 	serviceConfigDefaultsMap := map[*string]string{
 		&c.Services.KubeAPI.ServiceClusterIPRange:        DefaultServiceClusterIPRange,
 		&c.Services.KubeAPI.ServiceNodePortRange:         DefaultNodePortRange,
@@ -130,21 +185,43 @@ func (c *Cluster) setClusterServicesDefaults() {
 		&c.Services.Kubelet.ClusterDNSServer:             DefaultClusterDNSService,
 		&c.Services.Kubelet.ClusterDomain:                DefaultClusterDomain,
 		&c.Services.Kubelet.InfraContainerImage:          c.SystemImages.PodInfraContainer,
-		&c.Authentication.Strategy:                       DefaultAuthStrategy,
 		&c.Services.Etcd.Creation:                        DefaultEtcdBackupCreationPeriod,
 		&c.Services.Etcd.Retention:                       DefaultEtcdBackupRetentionPeriod,
 	}
 	for k, v := range serviceConfigDefaultsMap {
 		setDefaultIfEmpty(k, v)
 	}
+	// Add etcd timeouts
+	if c.Services.Etcd.ExtraArgs == nil {
+		c.Services.Etcd.ExtraArgs = make(map[string]string)
+	}
+	if _, ok := c.Services.Etcd.ExtraArgs[DefaultEtcdElectionTimeoutName]; !ok {
+		c.Services.Etcd.ExtraArgs[DefaultEtcdElectionTimeoutName] = DefaultEtcdElectionTimeoutValue
+	}
+	if _, ok := c.Services.Etcd.ExtraArgs[DefaultEtcdHeartbeatIntervalName]; !ok {
+		c.Services.Etcd.ExtraArgs[DefaultEtcdHeartbeatIntervalName] = DefaultEtcdHeartbeatIntervalValue
+	}
+
+	if c.Services.Etcd.BackupConfig != nil {
+		if c.Services.Etcd.BackupConfig.IntervalHours == 0 {
+			c.Services.Etcd.BackupConfig.IntervalHours = DefaultEtcdBackupConfigIntervalHours
+		}
+		if c.Services.Etcd.BackupConfig.Retention == 0 {
+			c.Services.Etcd.BackupConfig.Retention = DefaultEtcdBackupConfigRetention
+		}
+	}
 }
 
-func (c *Cluster) setClusterImageDefaults() {
+func (c *Cluster) setClusterImageDefaults() error {
 	var privRegURL string
-	imageDefaults, ok := v3.K8sVersionToRKESystemImages[c.Version]
-	if !ok {
-		imageDefaults = v3.K8sVersionToRKESystemImages[DefaultK8sVersion]
+
+	// Version Check
+	err := util.ValidateVersion(c.Version)
+	if err != nil {
+		return err
 	}
+
+	imageDefaults := v3.AllK8sVersions[c.Version]
 
 	for _, privReg := range c.PrivateRegistries {
 		if privReg.IsDefault {
@@ -160,6 +237,8 @@ func (c *Cluster) setClusterImageDefaults() {
 		&c.SystemImages.KubeDNSSidecar:            d(imageDefaults.KubeDNSSidecar, privRegURL),
 		&c.SystemImages.DNSmasq:                   d(imageDefaults.DNSmasq, privRegURL),
 		&c.SystemImages.KubeDNSAutoscaler:         d(imageDefaults.KubeDNSAutoscaler, privRegURL),
+		&c.SystemImages.CoreDNS:                   d(imageDefaults.CoreDNS, privRegURL),
+		&c.SystemImages.CoreDNSAutoscaler:         d(imageDefaults.CoreDNSAutoscaler, privRegURL),
 		&c.SystemImages.KubernetesServicesSidecar: d(imageDefaults.KubernetesServicesSidecar, privRegURL),
 		&c.SystemImages.Etcd:                      d(imageDefaults.Etcd, privRegURL),
 		&c.SystemImages.Kubernetes:                d(imageDefaults.Kubernetes, privRegURL),
@@ -182,6 +261,8 @@ func (c *Cluster) setClusterImageDefaults() {
 	for k, v := range systemImagesDefaultsMap {
 		setDefaultIfEmpty(k, v)
 	}
+
+	return nil
 }
 
 func (c *Cluster) setClusterNetworkDefaults() {
@@ -218,8 +299,33 @@ func (c *Cluster) setClusterNetworkDefaults() {
 	if c.Network.CanalNetworkProvider != nil {
 		networkPluginConfigDefaultsMap[CanalIface] = c.Network.CanalNetworkProvider.Iface
 	}
+	if c.Network.WeaveNetworkProvider != nil {
+		networkPluginConfigDefaultsMap[WeavePassword] = c.Network.WeaveNetworkProvider.Password
+	}
 	for k, v := range networkPluginConfigDefaultsMap {
 		setDefaultIfEmptyMapValue(c.Network.Options, k, v)
+	}
+}
+
+func (c *Cluster) setClusterAuthnDefaults() {
+	setDefaultIfEmpty(&c.Authentication.Strategy, DefaultAuthStrategy)
+
+	for _, strategy := range strings.Split(c.Authentication.Strategy, "|") {
+		strategy = strings.ToLower(strings.TrimSpace(strategy))
+		c.AuthnStrategies[strategy] = true
+	}
+
+	if c.AuthnStrategies[AuthnWebhookProvider] && c.Authentication.Webhook == nil {
+		c.Authentication.Webhook = &v3.AuthWebhookConfig{}
+	}
+	if c.Authentication.Webhook != nil {
+		webhookConfigDefaultsMap := map[*string]string{
+			&c.Authentication.Webhook.ConfigFile:   DefaultAuthnWebhookFile,
+			&c.Authentication.Webhook.CacheTimeout: DefaultAuthnCacheTimeout,
+		}
+		for k, v := range webhookConfigDefaultsMap {
+			setDefaultIfEmpty(k, v)
+		}
 	}
 }
 
@@ -228,4 +334,32 @@ func d(image, defaultRegistryURL string) string {
 		return image
 	}
 	return fmt.Sprintf("%s/%s", defaultRegistryURL, image)
+}
+
+func (c *Cluster) setCloudProvider() error {
+	p, err := cloudprovider.InitCloudProvider(c.CloudProvider)
+	if err != nil {
+		return fmt.Errorf("Failed to initialize cloud provider: %v", err)
+	}
+	if p != nil {
+		c.CloudConfigFile, err = p.GenerateCloudConfigFile()
+		if err != nil {
+			return fmt.Errorf("Failed to parse cloud config file: %v", err)
+		}
+		c.CloudProvider.Name = p.GetName()
+		if c.CloudProvider.Name == "" {
+			return fmt.Errorf("Name of the cloud provider is not defined for custom provider")
+		}
+	}
+	return nil
+}
+
+func GetExternalFlags(local, updateOnly, disablePortCheck bool, configDir, clusterFilePath string) ExternalFlags {
+	return ExternalFlags{
+		Local:            local,
+		UpdateOnly:       updateOnly,
+		DisablePortCheck: disablePortCheck,
+		ConfigDir:        configDir,
+		ClusterFilePath:  clusterFilePath,
+	}
 }

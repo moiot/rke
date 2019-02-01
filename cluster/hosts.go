@@ -11,6 +11,7 @@ import (
 	"github.com/rancher/rke/log"
 	"github.com/rancher/rke/pki"
 	"github.com/rancher/rke/services"
+	"github.com/rancher/rke/util"
 	"github.com/rancher/types/apis/management.cattle.io/v3"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
@@ -20,26 +21,36 @@ const (
 	etcdRoleLabel         = "node-role.kubernetes.io/etcd"
 	controlplaneRoleLabel = "node-role.kubernetes.io/controlplane"
 	workerRoleLabel       = "node-role.kubernetes.io/worker"
+	cloudConfigFileName   = "/etc/kubernetes/cloud-config"
+	authnWebhookFileName  = "/etc/kubernetes/kube-api-authn-webhook.yaml"
 )
 
-func (c *Cluster) TunnelHosts(ctx context.Context, local bool) error {
-	if local {
-		if err := c.ControlPlaneHosts[0].TunnelUpLocal(ctx); err != nil {
+func (c *Cluster) TunnelHosts(ctx context.Context, flags ExternalFlags) error {
+	if flags.Local {
+		if err := c.ControlPlaneHosts[0].TunnelUpLocal(ctx, c.Version); err != nil {
 			return fmt.Errorf("Failed to connect to docker for local host [%s]: %v", c.EtcdHosts[0].Address, err)
 		}
 		return nil
 	}
 	c.InactiveHosts = make([]*hosts.Host, 0)
 	uniqueHosts := hosts.GetUniqueHostList(c.EtcdHosts, c.ControlPlaneHosts, c.WorkerHosts)
-	for i := range uniqueHosts {
-		if err := uniqueHosts[i].TunnelUp(ctx, c.DockerDialerFactory, c.PrefixPath); err != nil {
-			// Unsupported Docker version is NOT a connectivity problem that we can recover! So we bail out on it
-			if strings.Contains(err.Error(), "Unsupported Docker version found") {
-				return err
+	var errgrp errgroup.Group
+	for _, uniqueHost := range uniqueHosts {
+		runHost := uniqueHost
+		errgrp.Go(func() error {
+			if err := runHost.TunnelUp(ctx, c.DockerDialerFactory, c.PrefixPath, c.Version); err != nil {
+				// Unsupported Docker version is NOT a connectivity problem that we can recover! So we bail out on it
+				if strings.Contains(err.Error(), "Unsupported Docker version found") {
+					return err
+				}
+				log.Warnf(ctx, "Failed to set up SSH tunneling for host [%s]: %v", runHost.Address, err)
+				c.InactiveHosts = append(c.InactiveHosts, runHost)
 			}
-			log.Warnf(ctx, "Failed to set up SSH tunneling for host [%s]: %v", uniqueHosts[i].Address, err)
-			c.InactiveHosts = append(c.InactiveHosts, uniqueHosts[i])
-		}
+			return nil
+		})
+	}
+	if err := errgrp.Wait(); err != nil {
+		return err
 	}
 	for _, host := range c.InactiveHosts {
 		log.Warnf(ctx, "Removing host [%s] from node lists", host.Address)
@@ -107,31 +118,49 @@ func (c *Cluster) InvertIndexHosts() error {
 	return nil
 }
 
-func (c *Cluster) SetUpHosts(ctx context.Context) error {
-	if c.Authentication.Strategy == X509AuthenticationProvider {
+func (c *Cluster) SetUpHosts(ctx context.Context, flags ExternalFlags) error {
+	if c.AuthnStrategies[AuthnX509Provider] {
 		log.Infof(ctx, "[certificates] Deploying kubernetes certificates to Cluster nodes")
-		hosts := hosts.GetUniqueHostList(c.EtcdHosts, c.ControlPlaneHosts, c.WorkerHosts)
+		forceDeploy := false
+		if flags.CustomCerts || c.RancherKubernetesEngineConfig.RotateCertificates != nil {
+			forceDeploy = true
+		}
+		hostList := hosts.GetUniqueHostList(c.EtcdHosts, c.ControlPlaneHosts, c.WorkerHosts)
 		var errgrp errgroup.Group
 
-		for _, host := range hosts {
-			runHost := host
+		hostsQueue := util.GetObjectQueue(hostList)
+		for w := 0; w < WorkerThreads; w++ {
 			errgrp.Go(func() error {
-				return pki.DeployCertificatesOnPlaneHost(ctx, runHost, c.RancherKubernetesEngineConfig, c.Certificates, c.SystemImages.CertDownloader, c.PrivateRegistriesMap)
+				var errList []error
+				for host := range hostsQueue {
+					err := pki.DeployCertificatesOnPlaneHost(ctx, host.(*hosts.Host), c.RancherKubernetesEngineConfig, c.Certificates, c.SystemImages.CertDownloader, c.PrivateRegistriesMap, forceDeploy)
+					if err != nil {
+						errList = append(errList, err)
+					}
+				}
+				return util.ErrList(errList)
 			})
 		}
 		if err := errgrp.Wait(); err != nil {
 			return err
 		}
 
-		if err := pki.DeployAdminConfig(ctx, c.Certificates[pki.KubeAdminCertName].Config, c.LocalKubeConfigPath); err != nil {
+		if err := rebuildLocalAdminConfig(ctx, c); err != nil {
 			return err
 		}
 		log.Infof(ctx, "[certificates] Successfully deployed kubernetes certificates to Cluster nodes")
 		if c.CloudProvider.Name != "" {
-			if err := deployCloudProviderConfig(ctx, hosts, c.SystemImages.Alpine, c.PrivateRegistriesMap, c.CloudConfigFile); err != nil {
+			if err := deployFile(ctx, hostList, c.SystemImages.Alpine, c.PrivateRegistriesMap, cloudConfigFileName, c.CloudConfigFile); err != nil {
 				return err
 			}
-			log.Infof(ctx, "[%s] Successfully deployed kubernetes cloud config to Cluster nodes", CloudConfigServiceName)
+			log.Infof(ctx, "[%s] Successfully deployed kubernetes cloud config to Cluster nodes", cloudConfigFileName)
+		}
+
+		if c.Authentication.Webhook != nil {
+			if err := deployFile(ctx, hostList, c.SystemImages.Alpine, c.PrivateRegistriesMap, authnWebhookFileName, c.Authentication.Webhook.ConfigFile); err != nil {
+				return err
+			}
+			log.Infof(ctx, "[%s] Successfully deployed authentication webhook config Cluster nodes", cloudConfigFileName)
 		}
 	}
 	return nil

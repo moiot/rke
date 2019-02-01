@@ -17,19 +17,22 @@ type App struct {
 }
 
 type AppSpec struct {
-	ProjectName     string            `json:"projectName,omitempty" norman:"type=reference[/v3/schemas/project]"`
-	Description     string            `json:"description,omitempty"`
-	TargetNamespace string            `json:"targetNamespace,omitempty"`
-	ExternalID      string            `json:"externalId,omitempty"`
-	Files           map[string]string `json:"files,omitempty"`
-	Answers         map[string]string `json:"answers,omitempty"`
-	AppRevisionName string            `json:"appRevisionName,omitempty" norman:"type=reference[/v3/project/schemas/apprevision]"`
-	Prune           bool              `json:"prune,omitempty"`
+	ProjectName         string            `json:"projectName,omitempty" norman:"type=reference[/v3/schemas/project]"`
+	Description         string            `json:"description,omitempty"`
+	TargetNamespace     string            `json:"targetNamespace,omitempty"`
+	ExternalID          string            `json:"externalId,omitempty"`
+	Files               map[string]string `json:"files,omitempty"`
+	Answers             map[string]string `json:"answers,omitempty"`
+	AppRevisionName     string            `json:"appRevisionName,omitempty" norman:"type=reference[/v3/project/schemas/apprevision]"`
+	Prune               bool              `json:"prune,omitempty"`
+	MultiClusterAppName string            `json:"multiClusterAppName,omitempty" norman:"type=reference[/v3/schemas/multiclusterapp]"`
 }
 
 var (
-	AppConditionInstalled condition.Cond = "Installed"
-	AppConditionMigrated  condition.Cond = "Migrated"
+	AppConditionInstalled    condition.Cond = "Installed"
+	AppConditionMigrated     condition.Cond = "Migrated"
+	AppConditionDeployed     condition.Cond = "Deployed"
+	AppConditionForceUpgrade condition.Cond = "ForceUpgrade"
 )
 
 type AppStatus struct {
@@ -73,10 +76,12 @@ type AppRevisionStatus struct {
 }
 
 type AppUpgradeConfig struct {
-	ExternalID string            `json:"externalId,omitempty"`
-	Answers    map[string]string `json:"answers,omitempty"`
+	ExternalID   string            `json:"externalId,omitempty"`
+	Answers      map[string]string `json:"answers,omitempty"`
+	ForceUpgrade bool              `json:"forceUpgrade,omitempty"`
 }
 
 type RollbackRevision struct {
 	RevisionName string `json:"revisionName,omitempty" norman:"type=reference[/v3/project/schemas/apprevision]"`
+	ForceUpgrade bool   `json:"forceUpgrade,omitempty"`
 }

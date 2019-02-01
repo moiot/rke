@@ -17,12 +17,14 @@ type RancherKubernetesEngineConfig struct {
 	SystemImages RKESystemImages `yaml:"system_images" json:"systemImages,omitempty"`
 	// SSH Private Key Path
 	SSHKeyPath string `yaml:"ssh_key_path" json:"sshKeyPath,omitempty"`
+	// SSH Certificate Path
+	SSHCertPath string `yaml:"ssh_cert_path" json:"sshCertPath,omitempty"`
 	// SSH Agent Auth enable
 	SSHAgentAuth bool `yaml:"ssh_agent_auth" json:"sshAgentAuth"`
 	// Authorization mode configuration used in the cluster
 	Authorization AuthzConfig `yaml:"authorization" json:"authorization,omitempty"`
 	// Enable/disable strict docker version checking
-	IgnoreDockerVersion bool `yaml:"ignore_docker_version" json:"ignoreDockerVersion"`
+	IgnoreDockerVersion bool `yaml:"ignore_docker_version" json:"ignoreDockerVersion" norman:"default=true"`
 	// Kubernetes version to use (if kubernetes image is specifed, image version takes precedence)
 	Version string `yaml:"kubernetes_version" json:"kubernetesVersion,omitempty"`
 	// List of private registries and their credentials
@@ -41,6 +43,12 @@ type RancherKubernetesEngineConfig struct {
 	BastionHost BastionHost `yaml:"bastion_host" json:"bastionHost,omitempty"`
 	// Monitoring Config
 	Monitoring MonitoringConfig `yaml:"monitoring" json:"monitoring,omitempty"`
+	// RestoreCluster flag
+	Restore RestoreConfig `yaml:"restore" json:"restore,omitempty"`
+	// Rotating Certificates Option
+	RotateCertificates *RotateCertificates `yaml:"rotate_certificates,omitempty" json:"rotateCertificates,omitempty"`
+	// DNS Config
+	DNS DNSConfig `yaml:"dns" json:"dns,omitempty"`
 }
 
 type BastionHost struct {
@@ -56,6 +64,10 @@ type BastionHost struct {
 	SSHKey string `yaml:"ssh_key" json:"sshKey,omitempty" norman:"type=password"`
 	// SSH Private Key Path
 	SSHKeyPath string `yaml:"ssh_key_path" json:"sshKeyPath,omitempty"`
+	// SSH Certificate
+	SSHCert string `yaml:"ssh_cert" json:"sshCert,omitempty"`
+	// SSH Certificate Path
+	SSHCertPath string `yaml:"ssh_cert_path" json:"sshCertPath,omitempty"`
 }
 
 type PrivateRegistry struct {
@@ -64,7 +76,7 @@ type PrivateRegistry struct {
 	// User name for registry acces
 	User string `yaml:"user" json:"user,omitempty"`
 	// Password for registry access
-	Password string `yaml:"password" json:"password,omitempty"`
+	Password string `yaml:"password" json:"password,omitempty" norman:"type=password"`
 	// Default registry
 	IsDefault bool `yaml:"is_default" json:"isDefault,omitempty"`
 }
@@ -88,6 +100,10 @@ type RKESystemImages struct {
 	KubeDNSSidecar string `yaml:"kubedns_sidecar" json:"kubednsSidecar,omitempty"`
 	// KubeDNS autoscaler image
 	KubeDNSAutoscaler string `yaml:"kubedns_autoscaler" json:"kubednsAutoscaler,omitempty"`
+	// CoreDNS image
+	CoreDNS string `yaml:"coredns" json:"coredns,omitempty"`
+	// CoreDNS autoscaler image
+	CoreDNSAutoscaler string `yaml:"coredns_autoscaler" json:"corednsAutoscaler,omitempty"`
 	// Kubernetes image
 	Kubernetes string `yaml:"kubernetes" json:"kubernetes,omitempty"`
 	// Flannel image
@@ -109,7 +125,7 @@ type RKESystemImages struct {
 	//CanalFlannel image
 	CanalFlannel string `yaml:"canal_flannel" json:"canalFlannel,omitempty"`
 	// Weave Node image
-	WeaveNode string `yaml:"wave_node" json:"weaveNode,omitempty"`
+	WeaveNode string `yaml:"weave_node" json:"weaveNode,omitempty"`
 	// Weave CNI image
 	WeaveCNI string `yaml:"weave_cni" json:"weaveCni,omitempty"`
 	// Pod infra container image
@@ -142,9 +158,13 @@ type RKEConfigNode struct {
 	// SSH Agent Auth enable
 	SSHAgentAuth bool `yaml:"ssh_agent_auth,omitempty" json:"sshAgentAuth,omitempty"`
 	// SSH Private Key
-	SSHKey string `yaml:"ssh_key" json:"sshKey,omitempty"`
+	SSHKey string `yaml:"ssh_key" json:"sshKey,omitempty" norman:"type=password"`
 	// SSH Private Key Path
 	SSHKeyPath string `yaml:"ssh_key_path" json:"sshKeyPath,omitempty"`
+	// SSH Certificate
+	SSHCert string `yaml:"ssh_cert" json:"sshCert,omitempty"`
+	// SSH Certificate Path
+	SSHCertPath string `yaml:"ssh_cert_path" json:"sshCertPath,omitempty"`
 	// Node Labels
 	Labels map[string]string `yaml:"labels" json:"labels,omitempty"`
 }
@@ -178,11 +198,13 @@ type ETCDService struct {
 	// External etcd prefix
 	Path string `yaml:"path" json:"path,omitempty"`
 	// Etcd Recurring snapshot Service
-	Snapshot bool `yaml:"snapshot" json:"snapshot,omitempty"`
+	Snapshot *bool `yaml:"snapshot" json:"snapshot,omitempty" norman:"default=true"`
 	// Etcd snapshot Retention period
-	Retention string `yaml:"retention" json:"retention,omitempty"`
+	Retention string `yaml:"retention" json:"retention,omitempty" norman:"default=72h"`
 	// Etcd snapshot Creation period
-	Creation string `yaml:"creation" json:"creation,omitempty"`
+	Creation string `yaml:"creation" json:"creation,omitempty" norman:"default=12h"`
+	// Backup backend for etcd snapshots, used by rke only
+	BackupConfig *BackupConfig `yaml:"backup_config" json:"backupConfig,omitempty"`
 }
 
 type KubeAPIService struct {
@@ -191,9 +213,11 @@ type KubeAPIService struct {
 	// Virtual IP range that will be used by Kubernetes services
 	ServiceClusterIPRange string `yaml:"service_cluster_ip_range" json:"serviceClusterIpRange,omitempty"`
 	// Port range for services defined with NodePort type
-	ServiceNodePortRange string `yaml:"service_node_port_range" json:"serviceNodePortRange,omitempty"`
+	ServiceNodePortRange string `yaml:"service_node_port_range" json:"serviceNodePortRange,omitempty" norman:"default=30000-32767"`
 	// Enabled/Disable PodSecurityPolicy
 	PodSecurityPolicy bool `yaml:"pod_security_policy" json:"podSecurityPolicy,omitempty"`
+	// Enable/Disable AlwaysPullImages admissions plugin
+	AlwaysPullImages bool `yaml:"always_pull_images" json:"always_pull_images,omitempty"`
 }
 
 type KubeControllerService struct {
@@ -241,7 +265,7 @@ type BaseService struct {
 
 type NetworkConfig struct {
 	// Network Plugin That will be used in kubernetes cluster
-	Plugin string `yaml:"plugin" json:"plugin,omitempty"`
+	Plugin string `yaml:"plugin" json:"plugin,omitempty" norman:"default=canal"`
 	// Plugin options to configure network properties
 	Options map[string]string `yaml:"options" json:"options,omitempty"`
 	// CalicoNetworkProvider
@@ -250,15 +274,24 @@ type NetworkConfig struct {
 	CanalNetworkProvider *CanalNetworkProvider `yaml:",omitempty" json:"canalNetworkProvider,omitempty"`
 	// FlannelNetworkProvider
 	FlannelNetworkProvider *FlannelNetworkProvider `yaml:",omitempty" json:"flannelNetworkProvider,omitempty"`
+	// WeaveNetworkProvider
+	WeaveNetworkProvider *WeaveNetworkProvider `yaml:",omitempty" json:"weaveNetworkProvider,omitempty"`
+}
+
+type AuthWebhookConfig struct {
+	// ConfigFile is a multiline string that represent a custom webhook config file
+	ConfigFile string `yaml:"config_file" json:"configFile,omitempty"`
+	// CacheTimeout controls how long to cache authentication decisions
+	CacheTimeout string `yaml:"cache_timeout" json:"cacheTimeout,omitempty"`
 }
 
 type AuthnConfig struct {
 	// Authentication strategy that will be used in kubernetes cluster
-	Strategy string `yaml:"strategy" json:"strategy,omitempty"`
-	// Authentication options
-	Options map[string]string `yaml:"options" json:"options,omitempty"`
+	Strategy string `yaml:"strategy" json:"strategy,omitempty" norman:"default=x509"`
 	// List of additional hostnames and IPs to include in the api server PKI cert
 	SANs []string `yaml:"sans" json:"sans,omitempty"`
+	// Webhook configuration options
+	Webhook *AuthWebhookConfig `yaml:"webhook" json:"webhook,omitempty"`
 }
 
 type AuthzConfig struct {
@@ -270,7 +303,7 @@ type AuthzConfig struct {
 
 type IngressConfig struct {
 	// Ingress controller type used by kubernetes
-	Provider string `yaml:"provider" json:"provider,omitempty"`
+	Provider string `yaml:"provider" json:"provider,omitempty" norman:"default=nginx"`
 	// Ingress controller options
 	Options map[string]string `yaml:"options" json:"options,omitempty"`
 	// NodeSelector key pair
@@ -373,6 +406,10 @@ type FlannelNetworkProvider struct {
 
 type CanalNetworkProvider struct {
 	FlannelNetworkProvider `yaml:",inline" json:",inline"`
+}
+
+type WeaveNetworkProvider struct {
+	Password string `yaml:"password,omitempty" json:"password,omitempty"`
 }
 
 type KubernetesServicesOptions struct {
@@ -563,7 +600,29 @@ type AWSCloudProvider struct {
 
 type MonitoringConfig struct {
 	// Monitoring server provider
-	Provider string `yaml:"provider" json:"provider,omitempty"`
+	Provider string `yaml:"provider" json:"provider,omitempty" norman:"default=metrics-server"`
 	// Metrics server options
 	Options map[string]string `yaml:"options" json:"options,omitempty"`
+}
+
+type RestoreConfig struct {
+	Restore      bool   `yaml:"restore" json:"restore,omitempty"`
+	SnapshotName string `yaml:"snapshot_name" json:"snapshotName,omitempty"`
+}
+type RotateCertificates struct {
+	// Rotate CA Certificates
+	CACertificates bool `json:"caCertificates,omitempty"`
+	// Services to rotate their certs
+	Services []string `json:"services,omitempty" norman:"type=enum,options=etcd|kubelet|kube-apiserver|kube-proxy|kube-scheduler|kube-controller-manager"`
+}
+
+type DNSConfig struct {
+	// DNS provider
+	Provider string `yaml:"provider" json:"provider,omitempty" norman:"default=kube-dns"`
+	// Upstream nameservers
+	UpstreamNameservers []string `yaml:"upstreamnameservers" json:"upstreamnameservers,omitempty"`
+	// ReverseCIDRs
+	ReverseCIDRs []string `yaml:"reversecidrs" json:"reversecidrs,omitempty"`
+	// NodeSelector key pair
+	NodeSelector map[string]string `yaml:"node_selector" json:"nodeSelector,omitempty"`
 }
