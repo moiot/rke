@@ -291,7 +291,7 @@ func (c *Cluster) BuildKubeControllerProcess(prefixPath string) v3.Process {
 	CommandArgs := map[string]string{
 		"address":                          "127.0.0.1",
 		"allow-untagged-cloud":             "true",
-		"allocate-node-cidrs":              "true",
+		"allocate-node-cidrs":              allocateNodeCidrs,
 		"cloud-provider":                   c.CloudProvider.Name,
 		"cluster-cidr":                     c.ClusterCIDR,
 		"configure-cloud-routes":           "false",
