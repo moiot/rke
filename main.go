@@ -10,7 +10,7 @@ import (
 	"github.com/urfave/cli"
 )
 
-var VERSION = "v0.0.12-dev"
+var VERSION = "v0.2-cpm"
 var released = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
 
 func main() {
