@@ -281,10 +281,15 @@ func (c *Cluster) BuildKubeControllerProcess(prefixPath string) v3.Process {
 		"kube-controller-manager",
 	}
 
+	allocateNodeCidrs := "true"
+	if (c.Services.Kubelet.ExtraArgs["network-plugin"] == "kubenet") {
+		allocateNodeCidrs = "false"
+	}
+
 	CommandArgs := map[string]string{
 		"address":                          "0.0.0.0",
 		"allow-untagged-cloud":             "true",
-		"allocate-node-cidrs":              "true",
+		"allocate-node-cidrs":              allocateNodeCidrs,
 		"cloud-provider":                   c.CloudProvider.Name,
 		"cluster-cidr":                     c.ClusterCIDR,
 		"configure-cloud-routes":           "false",
@@ -476,6 +481,13 @@ func (c *Cluster) BuildKubeletProcess(host *hosts.Host, prefixPath string) v3.Pr
 		if _, ok := c.Services.Kubelet.ExtraArgs[arg]; ok {
 			CommandArgs[arg] = value
 		}
+	}
+
+	if CommandArgs["network-plugin"] == "kubenet" {
+		ip := net.ParseIP(host.InternalAddress)
+		ip = ip.To4()
+		ip[3] = 128
+		CommandArgs["pod-cidr"] = ip.String() + "/25"
 	}
 
 	for arg, value := range CommandArgs {
